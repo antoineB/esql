@@ -250,5 +250,50 @@
 ;; TODO: (defadvice sql-build-completions
 
          ;; creer un fichier si aucun n'est créer avec la bonne configuration
-       
+
+(defun esql-sqlite-completion-table (sqlbuf schema)
+  (sql-redirect-value sqlbuf
+                      "SELECT name FROM sqlite_master WHERE type = 'table';"
+                      ".+"))
+
+(defun esql-sqlite-completion-table-column (sqlbuf schema)
+  (sql-redirect sqlbuf
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table';"
+                "*esql-result*")
+  (let ((tables '()))
+    (while (not (eq (point) (point-max)))
+      (let ((end-line (save-excursion (move-end-of-line 1) (point)))
+            table-name
+            columns)
+        (and (re-search-forward "CREATE TABLE \"?\\([^(\"?]+\\)\"?" end-line t)
+             (progn
+               (setq table-name (match-string-no-properties 1))
+               (forward-char)
+               (let ((loop t))
+                 (while (and loop (re-search-forward "[^ ]+" end-line t))
+                   (setq columns (append columns (list (match-string-no-properties 0))))
+                   (setq loop (re-search-forward "[,(]" end-line t))
+                   (when (eq (char-before) ?\()
+                     (backward-char)
+                     (forward-sexp)
+                     (forward-char 2))))))
+        (goto-char end-line)
+        (forward-char)
+        (add-to-list 'tables `(,table-name . ,columns))))
+    (kill-buffer "*esql-result*")
+    tables))
+
+(defun esql-mysql-completion-table (sqlbuf schema)
+  (sql-redirect-value
+   sqlbuf
+   (format "SELECT table_name FROM information_schema.columns WHERE table_schema = '%s';" schema)
+   ".+"))
+
+(defun esql-mysql-completion-table-column (sqlbuf schema)
+  (sql-redirect-value
+   sqlbuf
+   (format "SELECT table_schema, table_name, column_name FROM information_schema.columns WHERE table_schema = '%s';"
+           schema))
+
+
 (provide 'esql)
