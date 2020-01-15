@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2019  
 
-;; Author:  <antoine@antoine-AB350-Gaming>
+;; Author:  <antoine597@gmail.com>
 ;; Keywords: 
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -26,12 +26,13 @@
 
 
 ;; TODO: checkout https://www.emacswiki.org/emacs/SqlMode#toc5
-;; TODO: (nth 8 (syntax-ppss)) (indique si commentaire ou string)
 
 (require 'sql)
 (require 's)
 (require 'dash)
 (require 'cl)
+(require 'cl-lib)
+(require 'company)
 
 (defcustom sql-postgres-statement-starters
   (regexp-opt '("declare" "begin" "with" "fetch" "close" "checkpoint"))
@@ -55,6 +56,37 @@
 (sql-set-product-feature 'postgres :prompt-regexp "^[-[:alnum:]_]*=[#>] ")
 (sql-set-product-feature 'postgres :prompt-cont-regexp "^[-[:alnum:]_]*[-(][#>] ")
 
+(sql-set-product-feature 'ansi :keywords
+                         '("select" "from" "join" "left" "inner" "as" "order" "by"
+                           "having" "limit" "desc" "asc" "with" "on" "where" "like"
+                           "ilike" "or" "and"))
+
+(sql-set-product-feature 'ansi :datatypes '("array" "binary" "bit" "blob" "boolean" "char" "character" "clob"
+                                            "date" "dec" "decimal" "double" "float" "int" "integer" "interval"
+                                            "large" "national" "nchar" "nclob" "numeric" "object" "precision"
+                                            "real" "ref" "row" "scope" "smallint" "time" "timestamp" "varchar"
+                                            "varying" "zone"))
+
+;; TODO add "[]" to all types?
+(sql-set-product-feature 'postgres :datatypes '("int4range" "int8range" "numrange" "tsrange" "tstzrange" "daterange"
+                                                "any" "anyarray" "anyelement" "anyenum" "anynonarray" "cstring" "internal"
+                                                "language_handler" "fdw_handler" "record" "trigger" "void" "opaque"
+                                                "bit" "bit()" "bit varying" "bit varying()" "bigint" "int8" "bigserial"
+                                                "serial8" "boolean" "bool" "box" "bytea" "character" "character()"
+                                                "char" "char()" "character varying" "character varying()" "varchar()"
+                                                "varchar" "cidr" "circle" "date" "double precision" "float8" "inet"
+                                                "integer" "int" "int4"
+                                                ;; TODO interval [ fields ] [ (p) ]
+                                                "json" "jsonb" "line" "lseg" "macaddr" "money" "numeric" "numeric(p,s)" 
+                                                "decimal" "decimal(p,s)" "path" "pg_lsn" "point" "polygon" "real" "float4"
+                                                "smallint" "int2" "smallserial" "serial2" "serial" "serial4" "text" "time"
+                                                "time without time zone" "time with time zone" "time(0) without time zone"
+                                                "time(0) with time zone" "timestamp without time zone" "timestamp with time zone"
+                                                "timestamp(0) without time zone" "timestamp(0) with time zone" "timetz"
+                                                "timestamptz" "tsquery" "tsvector" "txid_snapshot" "uuid" "xml"))
+
+(sql-set-product-feature 'ansi :functions '())
+
 (defun esql-scratchpad ()
   (interactive)
   (let ((sqli-buffer (call-interactively #'sql-connect))
@@ -65,7 +97,7 @@
       (run-hooks 'sql-set-sqli-hook))
     (pop-to-buffer buffer)))
 
-;; Copied from that https://github.com/Fuco1/sql-workbench/blob/master/sql-workbench.el#L226 swb-get-query-bouds-at-point
+;; Copied from https://github.com/Fuco1/sql-workbench/blob/master/sql-workbench.el#L226 swb-get-query-bouds-at-point
 (defun esql--beginning-of-statement ()
   (save-excursion
     (let ((end (esql--end-of-statement))
@@ -176,24 +208,18 @@
 
 (defun esql--capture-comment-variable ()
   ;; TODO: get value of data accross multiple line
-  ;; TODO: support elisp eval eg: -- :email ,gnus-email
   (save-excursion
-    (let* ((comment-point (esql--get-preceding-comment))
-           (comment-str (buffer-substring-no-properties (car comment-point) (cdr comment-point))))
-      (-group-by
-       #'car
-       (-map
-        (lambda (str) 
-          (cdr (s-match "\\(:[^ \t]+\\) +\\(.+\\)[ \t]*$" str)))
-        (-filter (lambda (str) (s-matches? "^--[ \t]+\\(:[^ \t]+\\) +\\(.+\\)[ \t]*$" str))
-                 (s-split "[\n\r]" comment-str)))))))
+    (let* ((comment-point (esql--get-preceding-comment)))
+      (when comment-point
+        (let ((comment-str (buffer-substring-no-properties (car comment-point) (cdr comment-point))))
+          (-group-by
+           #'car
+           (-map
+            (lambda (str) 
+              (cdr (s-match "\\(:[^ \t]+\\) +\\(.+\\)[ \t]*$" str)))
+            (-filter (lambda (str) (s-matches? "^--[ \t]+\\(:[^ \t]+\\) +\\(.+\\)[ \t]*$" str))
+                     (s-split "[\n\r]" comment-str)))))))))
 
-;; (defun esql--every-parameter-provided ()
-;;   "Check that every parameter is provided"
-
-;; ;; eval expr
-;; (eval (macroexpand-all
-;;        (car (read-from-string "(+ 1 1)"))))
 
 (defun esql--get-parameter (param-alist name)
   (let ((data (cadadr (assoc name param-alist))))
@@ -239,16 +265,120 @@
         (font-lock-add-keywords
          'sql-mode
          '(("--[ \t]+\\(:[a-zA-Z0-9_-]+\\)" 1 'font-lock-variable-name-face t) ("\\(:[a-zA-Z0-9_-]+\\)" 1 'font-lock-variable-name-face t)))
-        ;;(sql-build-completions "public")
-        )
+        ;; TODO: place it here instead of company completion (esql-build-completions "public")
+        (local-key-binding (kbd "C-c C-c") 'esql-send-request))
     (font-lock-remove-keywords
      'sql-mode
      '(("--[ \t]+\\(:[a-zA-Z0-9_-]+\\)" 1 'font-lock-variable-name-face t) ("\\(:[a-zA-Z0-9_-]+\\)" 1 'font-lock-variable-name-face t)))))
 
+
+;; Completions
+;; TODO: Do the schema
 ;; TODO: (symbol-value 'sql-completion-object)
 
-;; TODO: (defadvice sql-build-completions
+;; Return list of string
+(defun esql-postgres-completion-table (sqlbuf schema)
+  (sql-redirect sqlbuf "\\a")
+  (let ((tables (sql-redirect-value sqlbuf "\\dt" (concat schema "|\\([^|]+\\)") 1)))
+    (sql-redirect sqlbuf "\\a")
+    tables))
 
-         ;; creer un fichier si aucun n'est créer avec la bonne configuration
-       
+(defun esql--group-by-table (table-columns)
+  (let ((result '()))
+    (dolist (elem table-columns)
+      (if (assoc (car elem) result)
+          (setcdr (assoc (car elem) result) (append (cdr (assoc (car elem) result)) (cdr elem)))
+        (add-to-list 'result `(,(car elem) . ,(cdr elem)))))
+    result))
+
+(defun esql-postgres-completion-column (sqlbuf schema)
+  (let ((query (format "SELECT table_schema, table_name, column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = '%s'
+                        ORDER BY table_schema, table_name, column_name;" schema))
+        result)
+    (sql-redirect sqlbuf "\\a")
+    (setq result (esql--group-by-table (sql-redirect-value sqlbuf query (concat "^" schema "|\\([^|]+\\)|\\(.+\\)$") '(1 2))))
+    (sql-redirect sqlbuf "\\a")
+    result))
+
+(sql-set-product-feature 'postgres :completion-table #'esql-postgres-completion-table)
+(sql-set-product-feature 'postgres :completion-table-column #'esql-postgres-completion-column)
+
+
+(defun esql-sqlite-completion-table (sqlbuf schema)
+  (sql-redirect-value sqlbuf
+                      "SELECT name FROM sqlite_master WHERE type = 'table';"
+                      ".+"))
+
+(defun esql-sqlite-completion-column (sqlbuf schema)
+  (sql-redirect sqlbuf
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table';"
+                "*esql-result*")
+  (let ((tables '()))
+    (while (not (eq (point) (point-max)))
+      (let ((end-line (save-excursion (move-end-of-line 1) (point)))
+            table-name
+            columns)
+        (and (re-search-forward "CREATE TABLE \"?\\([^(\"?]+\\)\"?" end-line t)
+             (progn
+               (setq table-name (match-string-no-properties 1))
+               (forward-char)
+               (let ((loop t))
+                 (while (and loop (re-search-forward "[^ ]+" end-line t))
+                   (setq columns (append columns (list (match-string-no-properties 0))))
+                   (setq loop (re-search-forward "[,(]" end-line t))
+                   (when (eq (char-before) ?\()
+                     (backward-char)
+                     (forward-sexp)
+                     (forward-char 2))))))
+        (goto-char end-line)
+        (forward-char)
+        (add-to-list 'tables `(,table-name . ,columns))))
+    (kill-buffer "*esql-result*")
+    tables))
+
+(sql-set-product-feature 'sqlite :completion-table #'esql-sqlite-completion-table)
+(sql-set-product-feature 'sqlite :completion-table-column #'esql-sqlite-completion-column)
+
+(defun esql-build-completions-1 (schema completion-list feature)
+  (let ((f (sql-get-product-feature sql-product feature)))
+    (when (and f sql-buffer)
+      (set completion-list (funcall f (get-buffer sql-buffer) schema)))))
+
+(defun esql-build-completions (schema)
+  (interactive)
+  (when (not (condition-case _err (symbol-value 'sql-built) (error nil)))
+    (set 'sql-completion-table nil)
+    (set 'sql-completion-table-column nil)
+    (esql-build-completions-1 schema 'sql-completion-table :completion-table)
+    (esql-build-completions-1 schema 'sql-completion-table-column :completion-table-column)
+    (set 'sql-built t)))
+
+(defun esql-company-table-backend (command &optional arg &rest ignored)
+  (interactive (list 'interactive))
+  (cl-case command
+    (interactive (company-begin-backend 'esql-company-table-backend))
+    (prefix (when (looking-back "\\(?:from\\|join\\|FROM\\|JOIN\\)\s+\\(.*\\)")
+              (match-string 1)))
+    (candidates (progn (esql-build-completions "public") (all-completions arg (symbol-value 'sql-completion-table))))))
+;; TODO: support multiple schema
+;; TODO: support table name with quote like "some table name"
+
+(defun esql-company-keywords-backend (command &optional arg &rest ignored)
+  (interactive (list 'interactive))
+  (cl-case command
+    (interactive (company-begin-backend 'esql-company-keywords-backend))
+    (prefix (when (looking-back "[^a-zA-Z_-]\\([a-zA-Z]+\\)\\>")
+              (match-string 1)))
+    (candidates (all-completions arg (sql-get-product-feature sql-product :keywords 'ansi)))))
+
+(defun esql-company-datatypes-backend (command &optional arg &rest ignored)
+  (interactive (list 'interactive))
+  (cl-case command
+    (interactive (company-begin-backend 'esql-company-datatypes-backend))
+    (prefix (when (looking-back "::\\([a-zA-Z]+\\)\\>")
+              (match-string 1)))
+    (candidates (all-completions arg (sql-get-product-feature sql-product :datatypes 'ansi)))))
+
 (provide 'esql)
