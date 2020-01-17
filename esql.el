@@ -94,7 +94,8 @@
     (with-current-buffer buffer
       (setq sql-buffer sqli-buffer)
       (sql-mode)
-      (run-hooks 'sql-set-sqli-hook))
+      (run-hooks 'sql-set-sqli-hook)
+      (esql-minor-mode t))
     (pop-to-buffer buffer)))
 
 ;; Copied from https://github.com/Fuco1/sql-workbench/blob/master/sql-workbench.el#L226 swb-get-query-bouds-at-point
@@ -380,5 +381,51 @@
     (prefix (when (looking-back "::\\([a-zA-Z]+\\)\\>")
               (match-string 1)))
     (candidates (all-completions arg (sql-get-product-feature sql-product :datatypes 'ansi)))))
+
+(defun esql-s-trim-string (surrounding str)
+  (if (and (s-starts-with? surrounding str)
+             (s-ends-with? surrounding str))
+      (substring str (length surrounding) (- (length str) (length surrounding)))
+    str))
+
+(defun esql-table-alias ()
+  (let ((start (esql--beginning-of-statement))
+        (end (esql--end-of-statement))
+        (case-fold-search t)
+        (result '()))
+    (save-excursion
+      (goto-char start)
+      ;; TODO: schema
+      (while (re-search-forward "\\(from\\|join\\)[ \t\r\n]+\\([^ \t\r\n]+\\)\\([ \t\r\n]+as[ \t\r\n]+\\([^ \t\r\n]+\\)\\)?" end t)
+        (when (not (esql--inside-comment-or-string-p))
+          (add-to-list 'result (cons (or (match-string-no-properties 4) (esql-s-trim-string "\"" (match-string-no-properties 2)))
+                                     (esql-s-trim-string "\"" (match-string-no-properties 2))))))
+      result)))
+
+;; TODO: make a backend when no alias is provided
+(defun esql-company-column-backend (command &optional arg &rest ignored)
+  (interactive (list 'interactive))
+  (cl-case command
+    (interactive (company-begin-backend 'esql-company-column-backend))
+    (prefix (when (looking-back "\\([a-zA-Z_0-9]+\\)\\([.]\\([a-zA-Z_0-9]*\\)\\)")
+              (match-string-no-properties 0)))
+    (candidates ;;(all-completions arg (sql-get-product-feature sql-product :datatypes 'ansi))
+     (progn (esql-build-completions "public")
+            (let ((alias (esql-table-alias))
+                  (arg- (car (s-split "\\." arg))))
+              (all-completions arg (-map (lambda (x) (concat arg- "." x))
+                                          (cdr (assoc (cdr (assoc arg- alias)) (symbol-value 'sql-completion-table-column)))))))
+         
+     )))
+
+(defun esql-hook-fn ()
+  (require 'company)
+  (company-mode t)
+  (make-local-variable 'company-backends)
+  ;; TODO: keyword backend does work
+  (setq company-backends '((esql-company-column-backend esql-company-keywords-backend esql-company-table-backend esql-company-datatypes-backend company-dabbrev))))
+
+(add-hook 'sql-interactive-mode-hook #'esql-hook-fn)
+(add-hook 'esql-minor-mode-hook #'esql-hook-fn)
 
 (provide 'esql)
