@@ -56,6 +56,7 @@
 (sql-set-product-feature 'postgres :prompt-regexp "^[-[:alnum:]_]*=[#>] ")
 (sql-set-product-feature 'postgres :prompt-cont-regexp "^[-[:alnum:]_]*[-(][#>] ")
 
+(sql-set-product-feature 'ansi :default-schema "")
 (sql-set-product-feature 'ansi :keywords
                          '("select" "from" "join" "left" "inner" "as" "order" "by"
                            "having" "limit" "desc" "asc" "with" "on" "where" "like"
@@ -296,13 +297,14 @@
   (let ((query (format "SELECT table_schema, table_name, column_name
                         FROM information_schema.columns
                         WHERE table_schema = '%s'
-                        ORDER BY table_schema, table_name, column_name;" schema))
+                        ORDER BY table_schema, table_name, column_name;" (esql-quote-string schema)))
         result)
     (sql-redirect sqlbuf "\\a")
     (setq result (esql--group-by-table (sql-redirect-value sqlbuf query (concat "^" schema "|\\([^|]+\\)|\\(.+\\)$") '(1 2))))
     (sql-redirect sqlbuf "\\a")
     result))
 
+(sql-set-product-feature 'postgres :default-schema "public")
 (sql-set-product-feature 'postgres :completion-table #'esql-postgres-completion-table)
 (sql-set-product-feature 'postgres :completion-table-column #'esql-postgres-completion-column)
 
@@ -339,8 +341,48 @@
     (kill-buffer "*esql-result*")
     tables))
 
+(sql-set-product-feature 'sqlite :default-schema "")
 (sql-set-product-feature 'sqlite :completion-table #'esql-sqlite-completion-table)
 (sql-set-product-feature 'sqlite :completion-table-column #'esql-sqlite-completion-column)
+
+(defun esql-mysql-completion-table (sqlbuf schema)
+  ;; (sql-redirect sqlbuf "\\n")
+  (let ((result (-map #'s-trim (-drop 1 (sql-redirect-value sqlbuf
+                                             "SHOW TABLES;"
+                                             "^| \\(.+\\) +|$" 1)))))
+    ;; (sql-redirect sqlbuf "\\P")
+    result))
+
+(defun esql-quote-string (str)
+  (s-replace "'" "''" str))
+
+(defun esql-mysql-completion-column (sqlbuf schema)
+  ;; Make the query on one line otherwise no data is returned by sql-redirect-value.
+  (let ((query (format "SELECT table_schema, table_name, column_name FROM information_schema.columns WHERE table_schema = '%s' ORDER BY table_schema, table_name,column_name;" (esql-quote-string schema))))
+    (esql--group-by-table
+     (-map (lambda (lst) (list (s-trim (car lst)) (s-trim (cadr lst))))
+           ;; TODO: Doesn't work name likes `foo|bar`
+           (-drop 1 (sql-redirect-value sqlbuf query "^|[^|]+|\\([^|]+\\)|\\([^|]+\\)|$" '(1 2)))))))
+
+(defun esql-mysql-completion-column-bis (sqlbuf schema)
+  (let* ((query (format "SELECT table_schema, table_name, column_name FROM information_schema.columns WHERE table_schema = '%s' ORDER BY table_schema, table_name,column_name;" (esql-quote-string schema)))
+         (result (sql-redirect-value sqlbuf query ".+" 0))
+         (cells (cdr (s-match "[+]\\(-+\\)[+]\\(-+\\)[+]\\(-+\\)" (car result))))
+         (result- (-drop 3 (-take (- (length result) 2) result))))
+    (esql--group-by-table
+     (-map (lambda (line)
+             (let* ((cells0 (+ 1 (length (car cells))))
+                    (cells1 (+ cells0 1 (length (cadr cells))))
+                    (cells2 (+ cells1 1 (length (caddr cells)))))
+               (list (s-trim (substring line (+ 1 cells0) cells1))
+                     (s-trim (substring line (+ 1 cells1) cells2)))))
+           result-))))
+
+(sql-set-product-feature 'mysql :default-schema 'sql-database)
+(sql-set-product-feature 'mysql :completion-table #'esql-mysql-completion-table)
+(sql-set-product-feature 'mysql :completion-table-column #'esql-mysql-completion-column-bis)
+
+(sql-set-product-feature 'mysql :prompt-regexp "^[^>]+> ")
 
 (defun esql-build-completions-1 (schema completion-list feature)
   (let ((f (sql-get-product-feature sql-product feature)))
@@ -362,7 +404,7 @@
     (interactive (company-begin-backend 'esql-company-table-backend))
     (prefix (when (looking-back "\\(?:from\\|join\\|FROM\\|JOIN\\)\s+\\(.*\\)")
               (match-string 1)))
-    (candidates (progn (esql-build-completions "public") (all-completions arg (symbol-value 'sql-completion-table))))))
+    (candidates (progn (esql-build-completions (sql-get-product-feature sql-product :default-schema 'ansi)) (all-completions arg (symbol-value 'sql-completion-table))))))
 ;; TODO: support multiple schema
 ;; TODO: support table name with quote like "some table name"
 
@@ -410,7 +452,7 @@
     (prefix (when (looking-back "\\([a-zA-Z_0-9]+\\)\\([.]\\([a-zA-Z_0-9]*\\)\\)")
               (match-string-no-properties 0)))
     (candidates ;;(all-completions arg (sql-get-product-feature sql-product :datatypes 'ansi))
-     (progn (esql-build-completions "public")
+     (progn (esql-build-completions (sql-get-product-feature sql-product :default-schema 'ansi))
             (let ((alias (esql-table-alias))
                   (arg- (car (s-split "\\." arg))))
               (all-completions arg (-map (lambda (x) (concat arg- "." x))
