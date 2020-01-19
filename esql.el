@@ -41,15 +41,21 @@
   :type 'string
   :group 'SQL)
 
-(defvar sql-ansi-string-re "'\\(?:''\\|.\\)*'")
-
-(defvar sql-ansi-identifier-string-re "\"\\(?:[\\].\\|.\\)*\"")
-
 (defun esql--patch-sql-alist (product feature value)
   (plist-put (cdr (assoc product sql-product-alist)) feature value))
 
-(esql--patch-sql-alist 'postgres :string-re sql-ansi-string-re)
-(esql--patch-sql-alist 'postgres :identifier-string-re sql-ansi-identifier-string-re)
+(esql--patch-sql-alist 'ansi :string-re "'\\(?:''\\|.\\)*'")
+(esql--patch-sql-alist 'ansi :identifier-string-re "\"\\(?:[\\].\\|.\\)*\"")
+(esql--patch-sql-alist 'ansi :identifier-quote ?\")
+
+(esql--patch-sql-alist 'mysql :string-re "\\(?:'\\(?:''\\|.\\)*'\\)\\|\\(?:\"\\(?:\"\"\\|.\\)*\"\\)")
+(esql--patch-sql-alist 'mysql :identifier-string-re "`\\(?:[\\].\\|.\\)*`")
+(esql--patch-sql-alist 'mysql :identifier-quote ?\`)
+
+(esql--patch-sql-alist 'postgres :string-re "'\\(?:''\\|.\\)*'")
+(esql--patch-sql-alist 'postgres :identifier-string-re "\"\\(?:[\\].\\|.\\)*\"")
+(esql--patch-sql-alist 'postgres :identifier-quote ?\")
+
 (esql--patch-sql-alist 'postgres :statement sql-postgres-statement-starters)
 
 (sql-set-product-feature 'postgres :syntax-alist '((?\" . "\"")))
@@ -144,17 +150,20 @@
           ;; avoid comments and strings
           (continue t))
       (while continue
-        (if (re-search-forward "\\(--\\)\\|\\(/\\*\\)\\|\\('\\)\\|\\(\"\\)\\|\\([:@][a-zA-Z0-9_-]+\\|\\?\\|\\$[0-9]+\\)" end t)
+        (if (re-search-forward (concat "\\(--\\)\\|\\(/\\*\\)\\|\\('\\)\\|\\("
+                                       (string (sql-get-product-feature sql-product :identifier-quote 'ansi))
+                                       "\\)\\|\\([:@][a-zA-Z0-9_-]+\\|\\?\\|\\$[0-9]+\\)")
+                               end t)
             (setq continue 
                   (cond 
                    ;; string
                    ((match-string 3)
                     (backward-char 1)
-                    (re-search-forward (sql-get-product-feature sql-product :string-re sql-ansi-string-re) end t))
+                    (re-search-forward (sql-get-product-feature sql-product :string-re 'ansi) end t))
                    ;; identifier
                    ((match-string 4)
                     (backward-char 1)
-                    (re-search-forward (sql-get-product-feature sql-product :identifier-string-re sql-ansi-identifier-string-re) end t))
+                    (re-search-forward (sql-get-product-feature sql-product :identifier-string-re 'ansi) end t))
                    ;; single line comment
                    ((match-string 1)
                     (re-search-forward "\n\\|\r\n\\|\r" end t))
