@@ -273,11 +273,12 @@
   :init-value nil
   (if esql-minor-mode
       (progn
+        ;; TODO: the fontification isn't applyied
         (font-lock-add-keywords
          'sql-mode
          '(("--[ \t]+\\(:[a-zA-Z0-9_-]+\\)" 1 'font-lock-variable-name-face t) ("\\(:[a-zA-Z0-9_-]+\\)" 1 'font-lock-variable-name-face t)))
         ;; TODO: place it here instead of company completion (esql-build-completions "public")
-        (local-key-binding (kbd "C-c C-c") 'esql-send-request))
+        (local-set-key (kbd "C-c C-c") 'esql-send-request))
     (font-lock-remove-keywords
      'sql-mode
      '(("--[ \t]+\\(:[a-zA-Z0-9_-]+\\)" 1 'font-lock-variable-name-face t) ("\\(:[a-zA-Z0-9_-]+\\)" 1 'font-lock-variable-name-face t)))))
